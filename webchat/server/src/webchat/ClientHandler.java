@@ -27,6 +27,10 @@ public class ClientHandler implements Runnable {
     private OutputStream out;
     private String username;
 
+    // Server.ROLE_TI ou Server.ROLE_COLABORADOR. Definido antes de entrar no mapa
+    // "clients", para que outras threads ja o encontrem preenchido.
+    private String role;
+
     // Em qual sala este cliente esta "olhando" agora. So existe depois do HELLO,
     // por isso comeca null; broadcast(..) usa isso para decidir quem recebe cada MSG.
     private volatile String currentRoom;
@@ -80,15 +84,34 @@ public class ClientHandler implements Runnable {
     }
 
     private void chatLoop() throws IOException {
-        // Primeira mensagem esperada do cliente, por protocolo: HELLO|<username>
+        // Primeira mensagem esperada do cliente, por protocolo: HELLO|<username>|<papel>|<senha>
         String hello = WebSocketCodec.readTextFrame(in);
         if (hello == null || !hello.startsWith("HELLO|")) {
             return;
         }
-        String desiredName = hello.substring("HELLO|".length()).trim();
+        String[] parts = hello.split("\\|", 4);
+        String desiredName = parts.length > 1 ? parts[1].trim() : "";
+        String desiredRole = parts.length > 2 ? parts[2].trim() : "";
+        String password = parts.length > 3 ? parts[3] : "";
+
         if (desiredName.isEmpty()) {
             desiredName = "Usuario" + (int) (Math.random() * 1000);
         }
+        // "," e ":" sao separadores da lista USERS, entao nao podem aparecer no nome.
+        if (desiredName.contains(",") || desiredName.contains(":")) {
+            WebSocketCodec.sendTextFrame(out, "ERROR|nome_invalido");
+            return;
+        }
+        if (Server.ROLE_TI.equals(desiredRole)) {
+            if (!Server.TI_PASSWORD.equals(password)) {
+                WebSocketCodec.sendTextFrame(out, "ERROR|senha_invalida");
+                return;
+            }
+        } else if (!Server.ROLE_COLABORADOR.equals(desiredRole)) {
+            WebSocketCodec.sendTextFrame(out, "ERROR|papel_invalido");
+            return;
+        }
+        role = desiredRole;
 
         // putIfAbsent e' atomico: evita que duas threads registrem o mesmo nome ao mesmo tempo.
         if (clients.putIfAbsent(desiredName, this) != null) {
@@ -97,9 +120,15 @@ public class ClientHandler implements Runnable {
         }
         username = desiredName;
 
-        WebSocketCodec.sendTextFrame(out, "WELCOME|" + username);
+        WebSocketCodec.sendTextFrame(out, "WELCOME|" + username + "|" + role);
         send("ROOMS|" + String.join(",", Server.ROOMS));
-        broadcastGlobal("JOIN|" + username);
+        send("ANNOUNCEMENTS|" + Server.ANNOUNCEMENTS_ROOM);
+        if (Server.ROLE_TI.equals(role)) {
+            for (String room : Server.ROOMS) {
+                send("PENDING|" + room + "|" + Server.pendingReplies.get(room));
+            }
+        }
+        broadcastGlobal("JOIN|" + username + "|" + role);
         broadcastUserList();
 
         joinRoom(Server.ROOMS[0]); // toda conexao nova comeca na sala padrao ("Geral")
@@ -114,10 +143,18 @@ public class ClientHandler implements Runnable {
 
     private void handleMessage(String message) {
         if (message.startsWith("MSG|")) {
+            // O canal de avisos e' so' leitura para colaboradores; a regra fica no servidor
+            // para nao depender apenas do bloqueio feito na interface.
+            if (Server.ANNOUNCEMENTS_ROOM.equals(currentRoom) && !Server.ROLE_TI.equals(role)) {
+                send("ERROR|somente_ti");
+                return;
+            }
             String text = message.substring("MSG|".length());
-            String payload = "MSG|" + currentRoom + "|" + username + "|" + System.currentTimeMillis() + "|" + text;
-            saveToHistory(currentRoom, payload);
-            broadcastToRoom(currentRoom, payload);
+            String payload = "MSG|" + currentRoom + "|" + username + "|" + role + "|" + System.currentTimeMillis() + "|" + text;
+            String room = currentRoom;
+            int pending = saveToHistory(room, payload);
+            broadcastToRoom(room, payload);
+            broadcastToTi("PENDING|" + room + "|" + pending);
         } else if (message.startsWith("JOIN_ROOM|")) {
             String room = message.substring("JOIN_ROOM|".length()).trim();
             joinRoom(room);
@@ -129,7 +166,7 @@ public class ClientHandler implements Runnable {
             String to = parts[1];
             String text = parts[2];
             ClientHandler target = clients.get(to);
-            String payload = "PRIVATE|" + username + "|" + System.currentTimeMillis() + "|" + text;
+            String payload = "PRIVATE|" + username + "|" + role + "|" + System.currentTimeMillis() + "|" + text;
             if (target != null) {
                 target.send(payload);
                 this.send(payload); // ecoa para o proprio remetente ver a mensagem enviada
@@ -156,13 +193,18 @@ public class ClientHandler implements Runnable {
         send("HISTORY_END|" + room);
     }
 
-    private void saveToHistory(String room, String payload) {
+    // Salva a mensagem e atualiza o contador de pendentes da sala no mesmo bloco
+    // synchronized, para que mensagens simultaneas nao percam contagem. Retorna o novo total.
+    private int saveToHistory(String room, String payload) {
         List<String> history = roomHistory.get(room);
         synchronized (history) {
             history.add(payload);
             while (history.size() > Server.HISTORY_LIMIT) {
                 history.remove(0);
             }
+            int pending = Server.ROLE_TI.equals(role) ? 0 : Server.pendingReplies.get(room) + 1;
+            Server.pendingReplies.put(room, pending);
+            return pending;
         }
     }
 
@@ -174,14 +216,29 @@ public class ClientHandler implements Runnable {
         }
     }
 
+    private void broadcastToTi(String payload) {
+        for (ClientHandler client : clients.values()) {
+            if (Server.ROLE_TI.equals(client.role)) {
+                client.send(payload);
+            }
+        }
+    }
+
     private void broadcastGlobal(String payload) {
         for (ClientHandler client : clients.values()) {
             client.send(payload);
         }
     }
 
+    // Formato: USERS|nome:papel,nome:papel,... (o papel permite separar T.I de colaboradores na tela)
     private void broadcastUserList() {
-        String list = String.join(",", clients.keySet());
+        StringBuilder list = new StringBuilder();
+        for (Map.Entry<String, ClientHandler> entry : clients.entrySet()) {
+            if (list.length() > 0) {
+                list.append(',');
+            }
+            list.append(entry.getKey()).append(':').append(entry.getValue().role);
+        }
         broadcastGlobal("USERS|" + list);
     }
 
@@ -197,7 +254,7 @@ public class ClientHandler implements Runnable {
     private void disconnect() {
         if (username != null) {
             clients.remove(username);
-            broadcastGlobal("LEAVE|" + username);
+            broadcastGlobal("LEAVE|" + username + "|" + role);
             broadcastUserList();
         }
     }
