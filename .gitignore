@@ -1,0 +1,22 @@
+# Compilados
+out/
+webchat/out/
+*.class
+*.jar
+
+# Logs
+*.log
+
+# IDEs
+.idea/
+*.iml
+.vscode/
+.settings/
+.project
+.classpath
+bin/
+
+# Sistema
+.DS_Store
+Thumbs.db
+desktop.ini

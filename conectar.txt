@@ -1,0 +1,14 @@
+QueroChat Java - Como conectar
+==========================
+
+1. O servidor ja esta rodando (porta 8080).
+   Caso precise reiniciar, rode a partir da raiz do projeto:
+
+   javac -d webchat/out webchat/server/src/webchat/*.java
+   java -cp webchat/out webchat.Server
+
+2. Para conectar, abra no navegador:
+
+   http://localhost:8080
+
+   Pode abrir varias abas/navegadores para simular varios clientes.

@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+<meta charset="UTF-8">
+<title>Chat Java</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="login-screen" class="screen">
+    <div class="login-box">
+        <h1>Chat Corporativo</h1>
+        <p>Digite seu nome para entrar</p>
+        <input type="text" id="username-input" placeholder="Seu nome" maxlength="20" autofocus>
+        <button id="login-button">Entrar</button>
+        <p id="login-error" class="error-text"></p>
+    </div>
+</div>
+
+<div id="chat-screen" class="screen hidden">
+    <aside id="sidebar">
+        <div id="brand">Chat Corporativo</div>
+
+        <div class="sidebar-section">
+            <h2>Canais</h2>
+            <ul id="room-list"></ul>
+        </div>
+
+        <div class="sidebar-section">
+            <h2>Pessoas</h2>
+            <ul id="user-list"></ul>
+        </div>
+    </aside>
+
+    <main id="chat-main">
+        <header id="room-header">
+            <span id="room-title">#</span>
+        </header>
+
+        <div id="private-indicator" class="hidden">
+            Enviando mensagem privada para <strong id="private-target-name"></strong>
+            <button id="cancel-private">cancelar</button>
+        </div>
+
+        <div id="message-log"></div>
+
+        <form id="message-form">
+            <input type="text" id="message-input" placeholder="Digite uma mensagem..." autocomplete="off">
+            <button type="submit">Enviar</button>
+        </form>
+    </main>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
