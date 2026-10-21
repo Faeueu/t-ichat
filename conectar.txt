@@ -1,14 +1,17 @@
-QueroChat Java - Como conectar
-==========================
+Suporte T.I - Como conectar
+===========================
 
-1. O servidor ja esta rodando (porta 8080).
-   Caso precise reiniciar, rode a partir da raiz do projeto:
+1. Rode a partir da raiz do projeto:
 
    javac -d webchat/out webchat/server/src/webchat/*.java
    java -cp webchat/out webchat.Server
 
-2. Para conectar, abra no navegador:
+2. Abra no navegador (apenas nesta maquina):
 
    http://localhost:8080
 
-   Pode abrir varias abas/navegadores para simular varios clientes.
+3. Na tela de login, escolha o papel:
+   - Colaborador: so o nome.
+   - Equipe de T.I: nome + senha  ti123
+
+   Abra varias abas para simular tecnicos e colaboradores ao mesmo tempo.
