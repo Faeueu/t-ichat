@@ -1,19 +1,26 @@
 // Estado local desta aba do navegador.
 let socket = null;
 let myUsername = null;
+let myRole = null; // 'TI' ou 'COLABORADOR', confirmado pelo servidor no WELCOME
 let privateTarget = null; // nome do usuario selecionado para mensagem privada, ou null
-let onlineUsers = []; // ultima lista de usuarios recebida do servidor (mensagem USERS)
+let onlineUsers = []; // ultima lista recebida do servidor (mensagem USERS): [{name, role}]
 let rooms = []; // lista fixa de salas recebida do servidor (mensagem ROOMS)
+let announcementsRoom = null; // canal em que so' a T.I escreve (mensagem ANNOUNCEMENTS)
 let currentRoom = null; // sala que esta sendo exibida agora nesta aba
+const pendingByRoom = {}; // sala -> mensagens aguardando resposta da T.I (so' a T.I recebe)
 
 const loginScreen = document.getElementById('login-screen');
 const chatScreen = document.getElementById('chat-screen');
 const usernameInput = document.getElementById('username-input');
+const passwordInput = document.getElementById('password-input');
+const roleRadios = document.querySelectorAll('input[name="role"]');
 const loginButton = document.getElementById('login-button');
 const loginError = document.getElementById('login-error');
 
+const meEl = document.getElementById('me');
 const roomListEl = document.getElementById('room-list');
 const roomTitleEl = document.getElementById('room-title');
+const tiListEl = document.getElementById('ti-list');
 const userListEl = document.getElementById('user-list');
 const messageLogEl = document.getElementById('message-log');
 const messageForm = document.getElementById('message-form');
@@ -22,27 +29,53 @@ const privateIndicator = document.getElementById('private-indicator');
 const privateTargetName = document.getElementById('private-target-name');
 const cancelPrivateButton = document.getElementById('cancel-private');
 
+const ERROR_TEXTS = {
+    nome_em_uso: 'Esse nome ja esta em uso, escolha outro.',
+    nome_invalido: 'O nome nao pode conter "," ou ":".',
+    senha_invalida: 'Senha da equipe de T.I incorreta.',
+    papel_invalido: 'Selecione Colaborador ou Equipe de T.I.',
+    somente_ti: 'Somente a equipe de T.I pode publicar neste canal.',
+    sala_invalida: 'Canal inexistente.',
+    usuario_offline: 'Esse usuario nao esta mais online.',
+};
+
 loginButton.addEventListener('click', connect);
 usernameInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') connect();
 });
+passwordInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') connect();
+});
+roleRadios.forEach((radio) => radio.addEventListener('change', () => {
+    passwordInput.classList.toggle('hidden', selectedRole() !== 'TI');
+}));
+
+function selectedRole() {
+    return document.querySelector('input[name="role"]:checked').value;
+}
+
+function roleLabel(role) {
+    return role === 'TI' ? 'T.I' : 'Colaborador';
+}
 
 function connect() {
     const username = usernameInput.value.trim();
     if (!username) return;
+    const role = selectedRole();
+    const password = role === 'TI' ? passwordInput.value : '';
 
     loginError.textContent = '';
     socket = new WebSocket('ws://' + location.host + '/ws');
 
     socket.addEventListener('open', () => {
-        // Primeira mensagem do protocolo: registra o nome de usuario no servidor.
-        socket.send('HELLO|' + username);
+        // Primeira mensagem do protocolo: registra nome e papel no servidor.
+        socket.send('HELLO|' + username + '|' + role + '|' + password);
     });
 
     socket.addEventListener('message', (event) => handleServerMessage(event.data));
 
     socket.addEventListener('close', () => {
-        addSystemMessage('Conexao com o servidor encerrada.');
+        if (myUsername !== null) addSystemMessage('Conexao com o servidor encerrada.');
     });
 
     socket.addEventListener('error', () => {
@@ -50,7 +83,7 @@ function connect() {
     });
 }
 
-// Separa "a|b|resto-com-possiveis-|" em 3 partes, sem cortar o texto livre do final.
+// Separa "a|b|resto-com-possiveis-|" em N partes, sem cortar o texto livre do final.
 function splitParts(text, count) {
     const parts = [];
     let rest = text;
@@ -65,20 +98,20 @@ function splitParts(text, count) {
 
 function handleServerMessage(raw) {
     if (raw.startsWith('WELCOME|')) {
-        myUsername = raw.substring('WELCOME|'.length);
+        [myUsername, myRole] = splitParts(raw.substring('WELCOME|'.length), 2);
+        meEl.textContent = 'Voce: ' + myUsername + ' (' + roleLabel(myRole) + ')';
         showChatScreen();
         return;
     }
 
     if (raw.startsWith('ERROR|')) {
         const reason = raw.substring('ERROR|'.length);
+        const text = ERROR_TEXTS[reason] || 'Erro: ' + reason;
         if (myUsername === null) {
-            loginError.textContent = reason === 'nome_em_uso'
-                ? 'Esse nome ja esta em uso, escolha outro.'
-                : 'Erro: ' + reason;
+            loginError.textContent = text;
             socket.close();
         } else {
-            addSystemMessage('Erro: ' + reason);
+            addSystemMessage(text);
         }
         return;
     }
@@ -89,19 +122,38 @@ function handleServerMessage(raw) {
         return;
     }
 
+    if (raw.startsWith('ANNOUNCEMENTS|')) {
+        announcementsRoom = raw.substring('ANNOUNCEMENTS|'.length);
+        updateComposer();
+        return;
+    }
+
+    if (raw.startsWith('PENDING|')) {
+        const [room, count] = splitParts(raw.substring('PENDING|'.length), 2);
+        pendingByRoom[room] = Number(count);
+        renderRoomList();
+        return;
+    }
+
     if (raw.startsWith('USERS|')) {
         const list = raw.substring('USERS|'.length);
-        renderUserList(list ? list.split(',') : []);
+        const users = list ? list.split(',').map((entry) => {
+            const [name, role] = entry.split(':');
+            return { name, role };
+        }) : [];
+        renderUserList(users);
         return;
     }
 
     if (raw.startsWith('JOIN|')) {
-        addSystemMessage(raw.substring('JOIN|'.length) + ' entrou no chat.');
+        const [name, role] = splitParts(raw.substring('JOIN|'.length), 2);
+        addSystemMessage(name + ' (' + roleLabel(role) + ') entrou no chat.');
         return;
     }
 
     if (raw.startsWith('LEAVE|')) {
-        addSystemMessage(raw.substring('LEAVE|'.length) + ' saiu do chat.');
+        const [name, role] = splitParts(raw.substring('LEAVE|'.length), 2);
+        addSystemMessage(name + ' (' + roleLabel(role) + ') saiu do chat.');
         return;
     }
 
@@ -110,6 +162,7 @@ function handleServerMessage(raw) {
         roomTitleEl.textContent = '# ' + currentRoom;
         messageLogEl.innerHTML = ''; // limpa a tela para mostrar o historico da sala
         renderRoomList();
+        updateComposer();
         return;
     }
 
@@ -119,14 +172,14 @@ function handleServerMessage(raw) {
     }
 
     if (raw.startsWith('MSG|')) {
-        const [room, from, timestamp, text] = splitParts(raw.substring('MSG|'.length), 4);
-        addChatMessage(from, Number(timestamp), text, false);
+        const [room, from, role, timestamp, text] = splitParts(raw.substring('MSG|'.length), 5);
+        addChatMessage(from, role, Number(timestamp), text, false);
         return;
     }
 
     if (raw.startsWith('PRIVATE|')) {
-        const [from, timestamp, text] = splitParts(raw.substring('PRIVATE|'.length), 3);
-        addChatMessage(from, Number(timestamp), text, true);
+        const [from, role, timestamp, text] = splitParts(raw.substring('PRIVATE|'.length), 4);
+        addChatMessage(from, role, Number(timestamp), text, true);
         return;
     }
 }
@@ -141,6 +194,14 @@ function renderRoomList() {
     rooms.forEach((room) => {
         const li = document.createElement('li');
         li.textContent = room;
+        const pending = pendingByRoom[room] || 0;
+        if (pending > 0) {
+            const notif = document.createElement('span');
+            notif.className = 'notif';
+            notif.textContent = pending > 99 ? '99+' : pending;
+            notif.title = pending + ' mensagem(ns) aguardando resposta da T.I';
+            li.appendChild(notif);
+        }
         if (room === currentRoom) li.classList.add('active');
         li.addEventListener('click', () => switchRoom(room));
         roomListEl.appendChild(li);
@@ -152,18 +213,31 @@ function switchRoom(room) {
     socket.send('JOIN_ROOM|' + room);
 }
 
-function renderUserList(usernames) {
-    onlineUsers = usernames;
+function renderUserList(users) {
+    onlineUsers = users;
+    tiListEl.innerHTML = '';
     userListEl.innerHTML = '';
-    usernames
-        .filter((name) => name !== myUsername)
-        .forEach((name) => {
+
+    users
+        .filter((user) => user.name !== myUsername)
+        .forEach((user) => {
             const li = document.createElement('li');
-            li.textContent = name;
-            if (name === privateTarget) li.classList.add('selected');
-            li.addEventListener('click', () => togglePrivateTarget(name));
-            userListEl.appendChild(li);
+            li.textContent = user.name;
+            if (user.name === privateTarget) li.classList.add('selected');
+            li.addEventListener('click', () => togglePrivateTarget(user.name));
+            (user.role === 'TI' ? tiListEl : userListEl).appendChild(li);
         });
+
+    addEmptyNotice(tiListEl, 'Nenhum tecnico online');
+    addEmptyNotice(userListEl, 'Ninguem online');
+}
+
+function addEmptyNotice(listEl, text) {
+    if (listEl.children.length > 0) return;
+    const li = document.createElement('li');
+    li.className = 'empty';
+    li.textContent = text;
+    listEl.appendChild(li);
 }
 
 function togglePrivateTarget(name) {
@@ -184,6 +258,21 @@ function updatePrivateIndicator() {
         privateIndicator.classList.remove('hidden');
     } else {
         privateIndicator.classList.add('hidden');
+    }
+    updateComposer();
+}
+
+// Colaboradores so' leem o canal de avisos; mensagem privada continua liberada em qualquer canal.
+function updateComposer() {
+    const readOnly = currentRoom === announcementsRoom && myRole !== 'TI' && !privateTarget;
+    messageInput.disabled = readOnly;
+    messageForm.querySelector('button').disabled = readOnly;
+    if (readOnly) {
+        messageInput.placeholder = 'Somente a equipe de T.I publica neste canal.';
+    } else if (myRole === 'TI') {
+        messageInput.placeholder = 'Responda ou publique um aviso...';
+    } else {
+        messageInput.placeholder = 'Descreva o problema...';
     }
 }
 
@@ -208,17 +297,24 @@ function addSystemMessage(text) {
     scrollToBottom();
 }
 
-function addChatMessage(from, timestampMs, text, isPrivate) {
+function addChatMessage(from, role, timestampMs, text, isPrivate) {
     const div = document.createElement('div');
     const isOwn = from === myUsername;
-    div.className = 'message' + (isOwn ? ' own' : '') + (isPrivate ? ' private' : '');
+    div.className = 'message' + (isOwn ? ' own' : '') + (isPrivate ? ' private' : '') + (role === 'TI' ? ' ti' : '');
 
     const meta = document.createElement('div');
     meta.className = 'meta';
     const time = new Date(timestampMs);
     const hh = String(time.getHours()).padStart(2, '0');
     const mm = String(time.getMinutes()).padStart(2, '0');
-    meta.textContent = (isOwn ? 'Voce' : from) + (isPrivate ? ' (privado)' : '') + ' - ' + hh + ':' + mm;
+    if (role === 'TI') {
+        const badge = document.createElement('span');
+        badge.className = 'badge';
+        badge.textContent = 'T.I';
+        meta.appendChild(badge);
+    }
+    meta.appendChild(document.createTextNode(
+        (isOwn ? 'Voce' : from) + (isPrivate ? ' (privado)' : '') + ' - ' + hh + ':' + mm));
 
     const body = document.createElement('div');
     body.textContent = text;

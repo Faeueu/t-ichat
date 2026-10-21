@@ -2,16 +2,24 @@
 <html lang="pt-br">
 <head>
 <meta charset="UTF-8">
-<title>Chat Java</title>
+<title>Suporte T.I</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
 <div id="login-screen" class="screen">
     <div class="login-box">
-        <h1>Chat Corporativo</h1>
-        <p>Digite seu nome para entrar</p>
+        <h1>Suporte T.I</h1>
+        <p>Identifique-se para entrar</p>
         <input type="text" id="username-input" placeholder="Seu nome" maxlength="20" autofocus>
+
+        <div class="role-choice">
+            <label><input type="radio" name="role" value="COLABORADOR" checked> Colaborador</label>
+            <label><input type="radio" name="role" value="TI"> Equipe de T.I</label>
+        </div>
+
+        <input type="password" id="password-input" class="hidden" placeholder="Senha da equipe de T.I">
+
         <button id="login-button">Entrar</button>
         <p id="login-error" class="error-text"></p>
     </div>
@@ -19,7 +27,8 @@
 
 <div id="chat-screen" class="screen hidden">
     <aside id="sidebar">
-        <div id="brand">Chat Corporativo</div>
+        <div id="brand">Suporte T.I</div>
+        <div id="me"></div>
 
         <div class="sidebar-section">
             <h2>Canais</h2>
@@ -27,7 +36,12 @@
         </div>
 
         <div class="sidebar-section">
-            <h2>Pessoas</h2>
+            <h2>Equipe de T.I</h2>
+            <ul id="ti-list"></ul>
+        </div>
+
+        <div class="sidebar-section">
+            <h2>Colaboradores</h2>
             <ul id="user-list"></ul>
         </div>
     </aside>
@@ -45,7 +59,7 @@
         <div id="message-log"></div>
 
         <form id="message-form">
-            <input type="text" id="message-input" placeholder="Digite uma mensagem..." autocomplete="off">
+            <input type="text" id="message-input" placeholder="Descreva o problema..." autocomplete="off">
             <button type="submit">Enviar</button>
         </form>
     </main>

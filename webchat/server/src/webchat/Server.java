@@ -11,9 +11,16 @@ public class Server {
 
     private static final int PORT = 8080;
 
-    // Salas fixas, simulando os canais de um chat interno de empresa. A primeira da
-    // lista e' a sala padrao em que todo usuario entra ao conectar.
-    static final String[] ROOMS = {"Geral", "Vendas", "TI", "RH"};
+    // Canais fixos de suporte, um por tipo de problema. A primeira da lista e' a sala
+    // padrao em que todo usuario entra ao conectar.
+    static final String ANNOUNCEMENTS_ROOM = "Avisos da T.I";
+    static final String[] ROOMS = {ANNOUNCEMENTS_ROOM, "Sistemas", "Computadores", "Impressoras", "Equipamentos"};
+
+    static final String ROLE_TI = "TI";
+    static final String ROLE_COLABORADOR = "COLABORADOR";
+
+    // Senha fixa para entrar como equipe de T.I (suficiente para a demonstracao local).
+    static final String TI_PASSWORD = "ti123";
 
     // Quantas mensagens guardar por sala. Depois disso as mais antigas sao descartadas,
     // para o historico nao crescer sem limite durante a demonstracao.
@@ -29,14 +36,19 @@ public class Server {
     // por uma thread enquanto outra adiciona uma mensagem nova.
     static final ConcurrentHashMap<String, List<String>> roomHistory = new ConcurrentHashMap<>();
 
+    // Quantas mensagens de colaboradores em cada sala ainda aguardam resposta da T.I.
+    // Soma 1 a cada mensagem de colaborador e volta a 0 quando a T.I escreve na sala.
+    static final ConcurrentHashMap<String, Integer> pendingReplies = new ConcurrentHashMap<>();
+
     static {
         for (String room : ROOMS) {
             roomHistory.put(room, new CopyOnWriteArrayList<>());
+            pendingReplies.put(room, 0);
         }
     }
 
     public static void main(String[] args) {
-        System.out.println("Servidor de chat (web) iniciando na porta " + PORT + "...");
+        System.out.println("Servidor de Suporte T.I iniciando na porta " + PORT + "...");
         System.out.println("Abra http://localhost:" + PORT + " no navegador.");
 
         try (ServerSocket serverSocket = new ServerSocket(PORT)) {

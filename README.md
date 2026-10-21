@@ -1,4 +1,4 @@
-# Chat Java — versão Web (Sockets, Streams e Multithreading)
+# Suporte T.I — chat web em Java (Sockets, Streams e Multithreading)
 
 Aplicação de chat em Java com back-end puro (sem frameworks) usando `ServerSocket`,
 `Socket`, `InputStream`/`OutputStream` e uma `Thread` por cliente conectado. A interface
@@ -6,10 +6,12 @@ Aplicação de chat em Java com back-end puro (sem frameworks) usando `ServerSoc
 implementado manualmente em cima de Sockets — sem Spring, Netty, Tomcat ou qualquer
 biblioteca de rede externa.
 
-Pensada como um "chat interno de empresa" (inspirado em ferramentas como o Microsoft
-Teams): o usuário entra, escolhe um canal (sala) na lateral, conversa em grupo ou manda
-mensagem privada para alguém específico. Quem entra em um canal que já tinha conversa
-anterior vê o histórico automaticamente — simulando um novo integrante de equipe.
+Pensada como o canal de comunicação entre os colaboradores de uma empresa e o setor de
+T.I: quem tem problema com sistemas, computadores, impressoras ou outros equipamentos
+relata no canal da categoria, e a equipe de T.I responde (no canal ou em mensagem
+privada). A T.I também publica comunicados num canal só dela, `Avisos da T.I`. Quem
+entra num canal que já tinha conversa vê o histórico automaticamente, e assim um técnico
+que chega depois sabe o que já foi relatado.
 
 > Existe também uma primeira versão em `src/` (cliente desktop Swing), mantida como
 > histórico do desenvolvimento. A versão avaliada é a web, em `webchat/`.
@@ -31,11 +33,12 @@ explicar por completo:
 
 | Desafio opcional | Onde |
 |---|---|
-| Identificação de usuários | tela de login + `HELLO|<username>`, nomes únicos (`ERROR|nome_em_uso`) |
+| Identificação de usuários | tela de login + `HELLO|<username>|<papel>|<senha>`, nomes únicos (`ERROR|nome_em_uso`) e dois papéis: `COLABORADOR` e `TI` (este com senha) |
 | Mensagens privadas | `PRIVATE|<destinatario>|<texto>`, roteada só ao destinatário + eco ao remetente |
-| Salas de conversa (grupos/canais) | lista fixa `Server.ROOMS`, cada `ClientHandler` guarda em qual sala está (`currentRoom`), broadcast filtra por sala |
+| Salas de conversa (grupos/canais) | lista fixa `Server.ROOMS`, um canal por tipo de problema; cada `ClientHandler` guarda em qual sala está (`currentRoom`), broadcast filtra por sala. `Avisos da T.I` aceita mensagens só da T.I (`ERROR|somente_ti`) |
 | Histórico de mensagens (para novos integrantes) | `Server.roomHistory` (mapa sala -> lista de mensagens em memória), reenviado via `HISTORY_BEGIN`/`HISTORY_END` sempre que alguém entra numa sala |
-| Lista de usuários online | mensagem `USERS`, exibida na barra lateral |
+| Notificação de mensagens pendentes | `Server.pendingReplies` (contador por sala), enviado só à T.I via `PENDING|sala|n` e exibido como bolinha vermelha no canal |
+| Lista de usuários online | mensagem `USERS` (`nome:papel`), exibida na barra lateral separada em "Equipe de T.I" e "Colaboradores" |
 
 Não implementamos (de propósito, para não inflar o escopo): banco de dados/persistência
 em disco, envio de arquivos/imagens e comandos de texto tipo `/sair`. Esses ficam
@@ -64,12 +67,13 @@ Navegador (aba 3) ──┘                                                 │
 Arquivos do back-end (`webchat/server/src/webchat/`):
 
 - **`Server.java`** — ponto de entrada. Abre o `ServerSocket` na porta 8080, define a
-  lista fixa de salas (`ROOMS`) e o histórico compartilhado (`roomHistory`), e fica em
-  loop aceitando conexões. Cada conexão vira uma `Thread` nova rodando um `ClientHandler`.
+  lista fixa de canais (`ROOMS`), o canal de avisos (`ANNOUNCEMENTS_ROOM`), os papéis
+  (`ROLE_TI`/`ROLE_COLABORADOR`), a senha da T.I (`TI_PASSWORD`) e o histórico
+  compartilhado (`roomHistory`), e fica em loop aceitando conexões. Cada conexão vira uma `Thread` nova rodando um `ClientHandler`.
 - **`ClientHandler.java`** — o núcleo do protocolo da aplicação. Roda em sua própria
   thread (uma por aba de navegador conectada). Resolve a requisição HTTP inicial, faz o
-  handshake do WebSocket se for `/ws`, registra o usuário, coloca ele na sala padrão
-  ("Geral") e entra num loop bloqueante lendo mensagens (`readTextFrame`) até a conexão
+  handshake do WebSocket se for `/ws`, valida nome, papel e senha, registra o usuário,
+  coloca ele na sala padrão ("Avisos da T.I") e entra num loop bloqueante lendo mensagens (`readTextFrame`) até a conexão
   cair. Guarda em qual sala o usuário está (`currentRoom`) para rotear/filtrar mensagens
   e salva cada mensagem de grupo no histórico da sala correspondente.
 - **`WebSocketCodec.java`** — toda a parte "protocolo bruto": parsing da requisição HTTP
@@ -124,6 +128,24 @@ Front-end (`webchat/web/`): `index.html` + `style.css` + `app.js`, sem nenhum fr
   evitou criar uma segunda estrutura de dados (lista de membros por sala) só para
   duplicar uma informação que o próprio `ClientHandler` já guardava.
 
+- **Como os papéis (T.I x colaborador) foram implementados?** Cada `ClientHandler`
+  ganhou um campo `role`, preenchido no `HELLO`. Entrar como T.I exige a senha fixa
+  `Server.TI_PASSWORD`, o suficiente para uma demonstração local (não é autenticação
+  de verdade, que exigiria cadastro de usuários e senhas guardadas com hash). O papel
+  viaja em cada `MSG`/`PRIVATE`/`USERS`, e a interface usa isso para destacar a T.I.
+
+- **Por que a regra "só a T.I escreve em Avisos" está no servidor, e não só na tela?**
+  Desabilitar o campo de texto no navegador é só conveniência: qualquer pessoa pode
+  abrir o console e mandar `MSG|...` direto pelo WebSocket. Quem decide é o
+  `ClientHandler.handleMessage()`, que recusa com `ERROR|somente_ti`.
+
+- **Como funciona a bolinha vermelha de pendentes?** O servidor guarda, por sala, quantas
+  mensagens de colaboradores vieram depois da última resposta da T.I
+  (`Server.pendingReplies`). O contador é atualizado dentro do mesmo `synchronized` que
+  salva a mensagem no histórico, para que duas mensagens simultâneas não percam contagem.
+  A cada mudança, o novo valor vai só para os técnicos (`broadcastToTi`). Resposta
+  privada não zera o contador, só uma resposta no próprio canal.
+
 - **Por que o histórico fica em memória (`List<String>` por sala) em vez de banco de
   dados?** O desafio opcional de persistência em disco/banco foi propositalmente deixado
   de fora para não aumentar a complexidade do projeto. Guardar as mensagens já formatadas
@@ -151,31 +173,32 @@ javac -d webchat/out webchat/server/src/webchat/*.java
 java -cp webchat/out webchat.Server
 ```
 
-Depois, abra `http://localhost:8080` em quantas abas/navegadores quiser.
+Depois, abra `http://localhost:8080` em quantas abas/navegadores quiser. Na tela de
+login, escolha **Colaborador** (só o nome) ou **Equipe de T.I** (nome + senha `ti123`).
 
 ## 5. Roteiro de demonstração (3+ clientes)
 
 1. Suba o servidor (`java -cp webchat/out webchat.Server`) — ele imprime a porta no console.
 2. Abra 3 abas (ou navegadores) em `http://localhost:8080`.
-3. Entre com nomes diferentes em cada aba (ex: Ana, Bruno, Carla). Todas devem ver os
-   avisos `"X entrou no chat"`, a lista de usuários online atualizada na lateral, e
-   começar automaticamente no canal "Geral".
-4. Mande uma mensagem de uma aba — deve aparecer nas outras duas, com o nome do
-   remetente e o horário.
-5. Clique em outro canal (ex: "TI") numa das abas — a tela de mensagens deve limpar e
-   mostrar (vazio, pois ninguém ainda escreveu ali). Volte para "Geral" na mesma aba e
-   confira que as mensagens anteriores reaparecem (é o próprio histórico sendo
-   reenviado).
-6. Clique no nome de um usuário na lista lateral de outra aba para selecioná-lo, envie
-   uma mensagem — só ele deve recebê-la (marcada como "(privado)"); a terceira aba não
-   deve ver nada.
-7. Feche uma das abas — as outras duas devem continuar funcionando normalmente e
-   receber o aviso `"X saiu do chat"` (prova de que a desconexão de um cliente não
-   derruba os demais).
-8. Para demonstrar o histórico "para novos integrantes": com Ana e Bruno já tendo
-   conversado em "Geral", abra uma quarta aba e entre com um nome novo (ex: Carla) — ela
-   deve ver as mensagens anteriores de Ana e Bruno assim que a tela de chat aparecer,
-   sem precisar fazer nada.
+3. Na primeira aba, entre como **Equipe de T.I** (ex: Carlos, senha `ti123`). Teste
+   antes uma senha errada para mostrar a recusa ("Senha da equipe de T.I incorreta").
+4. Nas outras duas, entre como **Colaborador** (ex: Ana e Bruno). Todas devem ver os
+   avisos `"X (papel) entrou no chat"`, e a lateral deve mostrar Carlos em "Equipe de
+   T.I" e os demais em "Colaboradores". Todos começam em `Avisos da T.I`.
+5. Na aba da Ana, note que o campo de texto em `Avisos da T.I` fica desabilitado. Na
+   aba do Carlos, publique um aviso (ex: "Manutenção da rede hoje às 18h") — ele aparece
+   para todos com o selo verde "T.I".
+6. Ana e Carlos clicam no canal `Impressoras`. Ana relata um problema ("A impressora do
+   2º andar não imprime") — Carlos vê; Bruno, que continua em Avisos, não vê.
+   Na aba do Carlos, o canal `Impressoras` mostra a bolinha vermelha com a quantidade de
+   mensagens aguardando resposta (abra outro canal no Carlos para ver o número subir);
+   quando ele responde no canal, a bolinha some.
+7. Na aba do Carlos, clique em "Ana" na lateral e responda em privado — só Ana recebe
+   (marcado como "(privado)").
+8. Para demonstrar o histórico: abra uma quarta aba, entre como outro técnico (ex:
+   Diana, T.I) e clique em `Impressoras` — ela vê o relato da Ana sem ninguém repetir.
+9. Feche uma das abas — as outras continuam funcionando normalmente e recebem o aviso
+   `"X saiu do chat"` (a desconexão de um cliente não derruba os demais).
 
 ## 6. Possíveis perguntas da banca (e por onde responder)
 
@@ -198,6 +221,12 @@ Depois, abra `http://localhost:8080` em quantas abas/navegadores quiser.
   `ClientHandler.broadcastToRoom()`: percorre `clients.values()` (todos os conectados)
   e só chama `send()` em quem tem `currentRoom` igual à sala da mensagem. Não existe uma
   lista separada "membros da sala X" — a própria coleção de clientes já guarda isso.
+- *"Um colaborador consegue burlar e escrever em Avisos da T.I?"* → Não: mesmo
+  mandando `MSG|...` direto pelo console do navegador, o servidor confere o `role` em
+  `ClientHandler.handleMessage()` e responde `ERROR|somente_ti`.
+- *"A senha da T.I é segura?"* → É uma senha fixa no código (`Server.TI_PASSWORD`),
+  pensada só para a demonstração local. Num sistema real haveria cadastro de usuários
+  e senhas armazenadas com hash.
 - *"O que acontece com o histórico se o servidor reiniciar?"* → Ele é perdido, pois vive
   só na memória (`List<String>` dentro de `Server.roomHistory`). É uma limitação
   assumida conscientemente — persistir em banco era um desafio opcional que decidimos
