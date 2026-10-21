@@ -65,6 +65,22 @@ body {
     background: #3b3173;
 }
 
+.role-choice {
+    display: flex;
+    justify-content: space-between;
+    margin: 4px 0 8px;
+    font-size: 14px;
+}
+
+.role-choice label {
+    cursor: pointer;
+}
+
+.login-box .role-choice input {
+    width: auto;
+    margin: 0 4px 0 0;
+}
+
 .error-text {
     color: #d33;
     min-height: 18px;
@@ -89,7 +105,12 @@ body {
     color: white;
     padding: 18px 8px;
     border-bottom: 1px solid #45436e;
-    margin-bottom: 8px;
+}
+
+#me {
+    font-size: 12px;
+    color: #9a97c6;
+    padding: 8px 8px 0;
 }
 
 .sidebar-section {
@@ -104,13 +125,13 @@ body {
     margin: 0 0 6px 8px;
 }
 
-#room-list, #user-list {
+#room-list, #ti-list, #user-list {
     list-style: none;
     padding: 0;
     margin: 0;
 }
 
-#room-list li, #user-list li {
+#room-list li, #ti-list li, #user-list li {
     padding: 8px 10px;
     border-radius: 6px;
     cursor: pointer;
@@ -123,8 +144,44 @@ body {
     color: #9a97c6;
 }
 
-#room-list li:hover, #user-list li:hover {
+#room-list li:hover, #ti-list li:hover, #user-list li:hover {
     background: #3c3a66;
+}
+
+#ti-list li::before {
+    content: "\25CF  ";
+    color: #4cc38a;
+}
+
+#ti-list li.empty, #user-list li.empty {
+    cursor: default;
+    font-style: italic;
+    color: #7f7cab;
+    background: transparent;
+}
+
+#ti-list li.empty::before {
+    content: "";
+}
+
+#room-list li {
+    display: flex;
+    align-items: center;
+}
+
+.notif {
+    margin-left: auto;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 6px;
+    border-radius: 10px;
+    background: #e5383b;
+    color: white;
+    font-size: 11px;
+    font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
 }
 
 #room-list li.active {
@@ -132,7 +189,7 @@ body {
     color: white;
 }
 
-#user-list li.selected {
+#ti-list li.selected, #user-list li.selected {
     background: #4b3f91;
     color: white;
 }
@@ -205,8 +262,23 @@ body {
     box-shadow: none;
 }
 
+.message.ti {
+    border-left: 3px solid #2f9e6b;
+}
+
 .message.private {
     border-left: 3px solid #e0a52d;
+}
+
+.badge {
+    display: inline-block;
+    background: #2f9e6b;
+    color: white;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 4px;
+    margin-right: 6px;
 }
 
 #message-form {
@@ -236,4 +308,14 @@ body {
 
 #message-form button:hover {
     background: #3b3173;
+}
+
+#message-input:disabled {
+    background: #f4f4f7;
+    cursor: not-allowed;
+}
+
+#message-form button:disabled {
+    background: #a9a4c9;
+    cursor: not-allowed;
 }
