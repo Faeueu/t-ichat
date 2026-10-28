@@ -67,6 +67,7 @@ public class ClientHandler implements Runnable {
             chatLoop();
         } catch (IOException | NoSuchAlgorithmException e) {
             System.out.println("Conexao encerrada com erro: " + e.getMessage());
+            e.printStackTrace();
         } finally {
             disconnect();
             closeSocket();
@@ -173,6 +174,26 @@ public class ClientHandler implements Runnable {
             } else {
                 this.send("ERROR|usuario_offline");
             }
+        } else if (message.startsWith("PRIVATE_FILE|")) {
+            // Envio de arquivos, imagens e planilhas exclusivo para chat privado:
+            // PRIVATE_FILE|<destinatario>|<filename>|<dataUrl>|<textoOpcional>
+            String[] parts = message.split("\\|", 5);
+            if (parts.length < 4) {
+                return;
+            }
+            String to = parts[1];
+            String filename = parts[2].replace('|', '_');
+            String dataUrl = parts[3];
+            String text = parts.length > 4 ? parts[4] : "";
+
+            ClientHandler target = clients.get(to);
+            String payload = "PRIVATE_FILE|" + username + "|" + role + "|" + System.currentTimeMillis() + "|" + filename + "|" + dataUrl + "|" + text;
+            if (target != null) {
+                target.send(payload);
+                this.send(payload); // ecoa para o proprio remetente
+            } else {
+                this.send("ERROR|usuario_offline");
+            }
         }
     }
 
@@ -244,7 +265,9 @@ public class ClientHandler implements Runnable {
 
     void send(String payload) {
         try {
-            WebSocketCodec.sendTextFrame(out, payload);
+            synchronized (out) {
+                WebSocketCodec.sendTextFrame(out, payload);
+            }
         } catch (IOException e) {
             // conexao desse cliente ja pode ter caido; a propria thread dele vai detectar
             // isso no proximo readTextFrame() e fazer a limpeza via disconnect().
