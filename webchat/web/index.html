@@ -58,7 +58,20 @@
 
         <div id="message-log"></div>
 
+        <div id="file-staging" class="hidden">
+            <div id="file-staging-card">
+                <span id="file-staging-icon">📎</span>
+                <div id="file-staging-details">
+                    <span id="file-staging-name"></span>
+                    <span id="file-staging-size"></span>
+                </div>
+                <button type="button" id="file-staging-remove" title="Remover anexo">&times;</button>
+            </div>
+        </div>
+
         <form id="message-form">
+            <input type="file" id="file-input" class="hidden" accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.csv,.ods,.txt,.zip">
+            <button type="button" id="attach-button" class="hidden" title="Anexar arquivo, imagem ou planilha (apenas privado)">📎</button>
             <input type="text" id="message-input" placeholder="Descreva o problema..." autocomplete="off">
             <button type="submit">Enviar</button>
         </form>

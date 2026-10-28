@@ -34,14 +34,14 @@ explicar por completo:
 | Desafio opcional | Onde |
 |---|---|
 | Identificação de usuários | tela de login + `HELLO|<username>|<papel>|<senha>`, nomes únicos (`ERROR|nome_em_uso`) e dois papéis: `COLABORADOR` e `TI` (este com senha) |
-| Mensagens privadas | `PRIVATE|<destinatario>|<texto>`, roteada só ao destinatário + eco ao remetente |
+| Mensagens privadas | `PRIVATE|<destinatario>|<texto>` e `PRIVATE_FILE|<destinatario>|<filename>|<dataUrl>|<texto>` (suporte a arquivos, imagens e planilhas exclusivo no chat privado), roteadas só ao destinatário + eco ao remetente |
 | Salas de conversa (grupos/canais) | lista fixa `Server.ROOMS`, um canal por tipo de problema; cada `ClientHandler` guarda em qual sala está (`currentRoom`), broadcast filtra por sala. `Avisos da T.I` aceita mensagens só da T.I (`ERROR|somente_ti`) |
 | Histórico de mensagens (para novos integrantes) | `Server.roomHistory` (mapa sala -> lista de mensagens em memória), reenviado via `HISTORY_BEGIN`/`HISTORY_END` sempre que alguém entra numa sala |
 | Notificação de mensagens pendentes | `Server.pendingReplies` (contador por sala), enviado só à T.I via `PENDING|sala|n` e exibido como bolinha vermelha no canal |
 | Lista de usuários online | mensagem `USERS` (`nome:papel`), exibida na barra lateral separada em "Equipe de T.I" e "Colaboradores" |
 
 Não implementamos (de propósito, para não inflar o escopo): banco de dados/persistência
-em disco, envio de arquivos/imagens e comandos de texto tipo `/sair`. Esses ficam
+em disco e comandos de texto tipo `/sair`. Esses ficam
 mencionados aqui só para deixar claro que foi uma escolha consciente de escopo, não um
 esquecimento.
 

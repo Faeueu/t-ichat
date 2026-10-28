@@ -9,8 +9,12 @@ let announcementsRoom = null; // canal em que so' a T.I escreve (mensagem ANNOUN
 let currentRoom = null; // sala que esta sendo exibida agora nesta aba
 const pendingByRoom = {}; // sala -> mensagens aguardando resposta da T.I (so' a T.I recebe)
 
+// Arquivo temporariamente anexado para envio no chat privado
+let stagedFile = null; // { name, size, type, dataUrl }
+
 const loginScreen = document.getElementById('login-screen');
 const chatScreen = document.getElementById('chat-screen');
+const chatMainEl = document.getElementById('chat-main');
 const usernameInput = document.getElementById('username-input');
 const passwordInput = document.getElementById('password-input');
 const roleRadios = document.querySelectorAll('input[name="role"]');
@@ -28,6 +32,15 @@ const messageInput = document.getElementById('message-input');
 const privateIndicator = document.getElementById('private-indicator');
 const privateTargetName = document.getElementById('private-target-name');
 const cancelPrivateButton = document.getElementById('cancel-private');
+
+// Elementos de anexo de arquivos (exclusivos para chat privado)
+const attachButton = document.getElementById('attach-button');
+const fileInput = document.getElementById('file-input');
+const fileStaging = document.getElementById('file-staging');
+const fileStagingName = document.getElementById('file-staging-name');
+const fileStagingSize = document.getElementById('file-staging-size');
+const fileStagingIcon = document.getElementById('file-staging-icon');
+const fileStagingRemove = document.getElementById('file-staging-remove');
 
 const ERROR_TEXTS = {
     nome_em_uso: 'Esse nome ja esta em uso, escolha outro.',
@@ -89,6 +102,7 @@ function splitParts(text, count) {
     let rest = text;
     for (let i = 0; i < count - 1; i++) {
         const bar = rest.indexOf('|');
+        if (bar === -1) break;
         parts.push(rest.substring(0, bar));
         rest = rest.substring(bar + 1);
     }
@@ -182,6 +196,12 @@ function handleServerMessage(raw) {
         addChatMessage(from, role, Number(timestamp), text, true);
         return;
     }
+
+    if (raw.startsWith('PRIVATE_FILE|')) {
+        const [from, role, timestamp, filename, dataUrl, text] = splitParts(raw.substring('PRIVATE_FILE|'.length), 6);
+        addChatFile(from, role, Number(timestamp), filename, dataUrl, text, true);
+        return;
+    }
 }
 
 function showChatScreen() {
@@ -210,6 +230,7 @@ function renderRoomList() {
 
 function switchRoom(room) {
     if (room === currentRoom || !socket) return;
+    clearStagedFile();
     socket.send('JOIN_ROOM|' + room);
 }
 
@@ -256,8 +277,11 @@ function updatePrivateIndicator() {
     if (privateTarget) {
         privateTargetName.textContent = privateTarget;
         privateIndicator.classList.remove('hidden');
+        attachButton.classList.remove('hidden'); // Exibe anexo apenas no privado
     } else {
         privateIndicator.classList.add('hidden');
+        attachButton.classList.add('hidden'); // Oculta anexo fora do privado
+        clearStagedFile();
     }
     updateComposer();
 }
@@ -266,9 +290,11 @@ function updatePrivateIndicator() {
 function updateComposer() {
     const readOnly = currentRoom === announcementsRoom && myRole !== 'TI' && !privateTarget;
     messageInput.disabled = readOnly;
-    messageForm.querySelector('button').disabled = readOnly;
+    messageForm.querySelector('button[type="submit"]').disabled = readOnly;
     if (readOnly) {
         messageInput.placeholder = 'Somente a equipe de T.I publica neste canal.';
+    } else if (privateTarget) {
+        messageInput.placeholder = 'Mensagem privada para ' + privateTarget + ' (anexos permitidos)...';
     } else if (myRole === 'TI') {
         messageInput.placeholder = 'Responda ou publique um aviso...';
     } else {
@@ -276,13 +302,144 @@ function updateComposer() {
     }
 }
 
+// ---------- Gestão de Anexos (Arquivos, Imagens e Planilhas no Privado) ----------
+
+attachButton.addEventListener('click', () => {
+    if (!privateTarget) {
+        alert('O envio de arquivos é permitido exclusivamente em conversas privadas.');
+        return;
+    }
+    fileInput.click();
+});
+
+fileInput.addEventListener('change', () => {
+    if (fileInput.files && fileInput.files.length > 0) {
+        handleSelectedFile(fileInput.files[0]);
+    }
+});
+
+fileStagingRemove.addEventListener('click', clearStagedFile);
+
+// Drag & drop suportado no chat principal
+chatMainEl.addEventListener('dragover', (e) => {
+    e.preventDefault();
+});
+
+chatMainEl.addEventListener('drop', (e) => {
+    e.preventDefault();
+    if (!privateTarget) {
+        alert('O envio de arquivos, imagens e planilhas é permitido apenas em conversas privadas.\nSelecione um usuário na lista lateral primeiro.');
+        return;
+    }
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        handleSelectedFile(e.dataTransfer.files[0]);
+    }
+});
+
+function handleSelectedFile(file) {
+    const MAX_SIZE = 8 * 1024 * 1024; // 8 MB
+    if (file.size > MAX_SIZE) {
+        alert('Arquivo muito grande! O limite máximo para envio é de 8 MB.');
+        fileInput.value = '';
+        return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        stagedFile = {
+            name: file.name,
+            size: file.size,
+            type: file.type,
+            dataUrl: e.target.result,
+        };
+        renderStagedFile();
+    };
+    reader.onerror = () => {
+        alert('Erro ao processar o arquivo selecionado.');
+        fileInput.value = '';
+    };
+    reader.readAsDataURL(file);
+}
+
+function renderStagedFile() {
+    if (!stagedFile) return;
+    const classification = classifyFile(stagedFile.name, stagedFile.dataUrl);
+    fileStagingIcon.textContent = classification.icon;
+    fileStagingName.textContent = stagedFile.name;
+    fileStagingSize.textContent = formatBytes(stagedFile.size);
+    fileStaging.classList.remove('hidden');
+    messageInput.focus();
+}
+
+function clearStagedFile() {
+    stagedFile = null;
+    fileInput.value = '';
+    fileStaging.classList.add('hidden');
+}
+
+function classifyFile(filename, dataUrl) {
+    const lowerName = filename.toLowerCase();
+    const isImage = /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(lowerName) || (dataUrl && dataUrl.startsWith('data:image/'));
+    const isSpreadsheet = /\.(xlsx|xls|csv|ods|tsv)$/i.test(lowerName) || (dataUrl && (dataUrl.includes('spreadsheet') || dataUrl.includes('excel') || dataUrl.includes('csv')));
+
+    if (isImage) {
+        return {
+            isImage: true,
+            isSpreadsheet: false,
+            icon: '🖼️',
+            badgeText: 'IMAGEM',
+            badgeClass: 'file-badge',
+        };
+    }
+    if (isSpreadsheet) {
+        return {
+            isImage: false,
+            isSpreadsheet: true,
+            icon: '📊',
+            badgeText: 'PLANILHA',
+            badgeClass: 'spreadsheet-badge',
+        };
+    }
+    return {
+        isImage: false,
+        isSpreadsheet: false,
+        icon: '📄',
+        badgeText: 'ARQUIVO',
+        badgeClass: 'file-badge',
+    };
+}
+
+function formatBytes(bytes) {
+    if (!bytes || isNaN(bytes)) return '';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+function estimateSizeFromDataUrl(dataUrl) {
+    if (!dataUrl) return 0;
+    const comma = dataUrl.indexOf(',');
+    if (comma === -1) return 0;
+    const base64Len = dataUrl.length - (comma + 1);
+    return Math.round((base64Len * 3) / 4);
+}
+
+// ---------- Envio de Mensagens e Anexos ----------
+
 messageForm.addEventListener('submit', (e) => {
     e.preventDefault();
     const text = messageInput.value.trim();
-    if (!text || !socket) return;
+    if (!text && !stagedFile) return;
+    if (!socket) return;
 
     if (privateTarget) {
-        socket.send('PRIVATE|' + privateTarget + '|' + text);
+        if (stagedFile) {
+            const safeName = stagedFile.name.replace(/\|/g, '_');
+            socket.send('PRIVATE_FILE|' + privateTarget + '|' + safeName + '|' + stagedFile.dataUrl + '|' + text);
+            clearStagedFile();
+        } else {
+            socket.send('PRIVATE|' + privateTarget + '|' + text);
+        }
     } else {
         socket.send('MSG|' + text);
     }
@@ -317,10 +474,120 @@ function addChatMessage(from, role, timestampMs, text, isPrivate) {
         (isOwn ? 'Voce' : from) + (isPrivate ? ' (privado)' : '') + ' - ' + hh + ':' + mm));
 
     const body = document.createElement('div');
+    body.className = 'message-text';
     body.textContent = text;
 
     div.appendChild(meta);
     div.appendChild(body);
+    messageLogEl.appendChild(div);
+    scrollToBottom();
+}
+
+function addChatFile(from, role, timestampMs, filename, dataUrl, text, isPrivate) {
+    const div = document.createElement('div');
+    const isOwn = from === myUsername;
+    div.className = 'message' + (isOwn ? ' own' : '') + (isPrivate ? ' private' : '') + (role === 'TI' ? ' ti' : '');
+
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    const time = new Date(timestampMs);
+    const hh = String(time.getHours()).padStart(2, '0');
+    const mm = String(time.getMinutes()).padStart(2, '0');
+    if (role === 'TI') {
+        const badge = document.createElement('span');
+        badge.className = 'badge';
+        badge.textContent = 'T.I';
+        meta.appendChild(badge);
+    }
+    meta.appendChild(document.createTextNode(
+        (isOwn ? 'Voce' : from) + (isPrivate ? ' (privado)' : '') + ' - ' + hh + ':' + mm));
+    div.appendChild(meta);
+
+    // Texto opcional que acompanha o arquivo
+    if (text && text.trim()) {
+        const body = document.createElement('div');
+        body.className = 'message-text';
+        body.textContent = text;
+        div.appendChild(body);
+    }
+
+    const classification = classifyFile(filename, dataUrl);
+    const estimatedSize = formatBytes(estimateSizeFromDataUrl(dataUrl));
+
+    const attachmentEl = document.createElement('div');
+    attachmentEl.className = 'file-attachment';
+
+    if (classification.isImage) {
+        const imgWrapper = document.createElement('div');
+        imgWrapper.className = 'attachment-image-wrapper';
+
+        const img = document.createElement('img');
+        img.className = 'chat-image-preview';
+        img.src = dataUrl;
+        img.alt = filename;
+        img.title = 'Clique para abrir a imagem em tamanho real';
+        img.addEventListener('click', () => {
+            const win = window.open('');
+            if (win) {
+                win.document.write('<!DOCTYPE html><html><head><title>' + filename + '</title><style>body{margin:0;background:#111;display:flex;align-items:center;justify-content:center;height:100vh;}img{max-width:100%;max-height:100vh;object-fit:contain;}</style></head><body><img src="' + dataUrl + '"></body></html>');
+            }
+        });
+
+        const footer = document.createElement('div');
+        footer.className = 'attachment-image-footer';
+        footer.innerHTML = '<span>' + filename + ' (' + estimatedSize + ')</span>';
+
+        const dlBtn = document.createElement('a');
+        dlBtn.className = 'attachment-download-btn';
+        dlBtn.href = dataUrl;
+        dlBtn.download = filename;
+        dlBtn.textContent = '⬇ Baixar';
+        footer.appendChild(dlBtn);
+
+        imgWrapper.appendChild(img);
+        imgWrapper.appendChild(footer);
+        attachmentEl.appendChild(imgWrapper);
+    } else {
+        const card = document.createElement('div');
+        card.className = 'attachment-file-card ' + (classification.isSpreadsheet ? 'spreadsheet' : 'generic-file');
+
+        const iconEl = document.createElement('div');
+        iconEl.className = 'attachment-icon';
+        iconEl.textContent = classification.icon;
+
+        const infoEl = document.createElement('div');
+        infoEl.className = 'attachment-info';
+
+        const badgeEl = document.createElement('div');
+        badgeEl.className = 'attachment-badge ' + classification.badgeClass;
+        badgeEl.textContent = classification.badgeText;
+
+        const nameEl = document.createElement('div');
+        nameEl.className = 'attachment-name';
+        nameEl.textContent = filename;
+        nameEl.title = filename;
+
+        const sizeEl = document.createElement('div');
+        sizeEl.className = 'attachment-size';
+        sizeEl.textContent = estimatedSize;
+
+        infoEl.appendChild(badgeEl);
+        infoEl.appendChild(nameEl);
+        infoEl.appendChild(sizeEl);
+
+        const dlBtn = document.createElement('a');
+        dlBtn.className = 'attachment-download-btn';
+        dlBtn.href = dataUrl;
+        dlBtn.download = filename;
+        dlBtn.textContent = '⬇ Baixar';
+
+        card.appendChild(iconEl);
+        card.appendChild(infoEl);
+        card.appendChild(dlBtn);
+        attachmentEl.appendChild(card);
+    }
+
+    div.appendChild(attachmentEl);
     messageLogEl.appendChild(div);
     scrollToBottom();
 }

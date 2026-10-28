@@ -94,88 +94,143 @@ final class WebSocketCodec {
     // --- Fase WebSocket (frames) -------------------------------------------------------
 
     // Frames do servidor para o cliente NAO usam mascara (so cliente->servidor mascara,
-    // conforme RFC 6455). FIN=1 e opcode=0x1 (texto) fixos, pois so enviamos mensagens
-    // completas de uma vez.
+    // conforme RFC 6455). FIN=1 e opcode=0x1 (texto) fixos, pois enviamos mensagens
+    // completas de uma vez diretamente no stream.
     static void sendTextFrame(OutputStream out, String payload) throws IOException {
         byte[] data = payload.getBytes(StandardCharsets.UTF_8);
-        ByteArrayOutputStream frame = new ByteArrayOutputStream();
-
-        frame.write(0x81); // FIN=1 (10000000) + opcode=0001 (texto) => 0x81
-
         int length = data.length;
+
+        out.write(0x81); // FIN=1 (10000000) + opcode=0001 (texto) => 0x81
+
         if (length <= 125) {
-            frame.write(length);
+            out.write(length);
         } else if (length <= 65535) {
-            frame.write(126);
-            frame.write((length >>> 8) & 0xFF);
-            frame.write(length & 0xFF);
+            out.write(126);
+            out.write((length >>> 8) & 0xFF);
+            out.write(length & 0xFF);
         } else {
-            frame.write(127);
+            out.write(127);
+            long len = length;
             for (int shift = 56; shift >= 0; shift -= 8) {
-                frame.write((int) ((length >>> shift) & 0xFF));
+                out.write((int) ((len >>> shift) & 0xFF));
             }
         }
 
-        frame.write(data);
-        out.write(frame.toByteArray());
+        out.write(data);
         out.flush();
     }
 
-    // Le um frame vindo do navegador. Frames do cliente SEMPRE vem mascarados (bit de
-    // mascara = 1); por isso precisamos ler a chave de mascara de 4 bytes e desfazer o
-    // XOR byte a byte para recuperar o payload original.
+    // Le um frame (ou sequencia de frames continuados) vindo do navegador. Frames do cliente
+    // SEMPRE vem mascarados (bit de mascara = 1); por isso lemos a chave de mascara de 4 bytes
+    // e desfazemos o XOR byte a byte para recuperar o payload original.
+    // Suporta tambem frames de continuacao (opcode 0x0) caso mensagens maiores (como arquivos
+    // e imagens) sejam fragmentadas pelo navegador.
     static String readTextFrame(InputStream in) throws IOException {
-        int firstByte = in.read();
-        if (firstByte == -1) {
-            return null; // conexao fechada sem frame de close explicito
-        }
-        int opcode = firstByte & 0x0F;
+        ByteArrayOutputStream assembled = null;
+        int messageOpcode = -1;
 
+        while (true) {
+            int firstByte = in.read();
+            if (firstByte == -1) {
+                return null; // conexao fechada sem frame de close explicito
+            }
+            boolean fin = (firstByte & 0x80) != 0;
+            int opcode = firstByte & 0x0F;
+
+            if (opcode == 0x8) {
+                return null; // frame de close
+            }
+            if (opcode == 0x9 || opcode == 0xA) {
+                skipFrame(in);
+                continue; // ping/pong: ignora e le o proximo frame real
+            }
+
+            if (messageOpcode == -1) {
+                messageOpcode = opcode;
+                if (messageOpcode != 0x1) {
+                    throw new IOException("opcode nao suportado: " + messageOpcode);
+                }
+            } else if (opcode != 0x0) {
+                throw new IOException("esperado frame de continuacao (opcode 0x0), recebido: " + opcode);
+            }
+
+            int secondByte = readStrict(in);
+            boolean masked = (secondByte & 0x80) != 0;
+            long length = secondByte & 0x7F;
+
+            if (length == 126) {
+                length = ((readStrict(in) & 0xFF) << 8) | (readStrict(in) & 0xFF);
+            } else if (length == 127) {
+                length = 0;
+                for (int i = 0; i < 8; i++) {
+                    length = (length << 8) | (readStrict(in) & 0xFFL);
+                }
+            }
+
+            if (length < 0 || length > 16 * 1024 * 1024) {
+                throw new IOException("tamanho de frame excede o limite permitido: " + length);
+            }
+
+            byte[] mask = new byte[4];
+            if (masked) {
+                for (int i = 0; i < 4; i++) {
+                    mask[i] = (byte) readStrict(in);
+                }
+            }
+
+            byte[] payload = new byte[(int) length];
+            int offset = 0;
+            while (offset < payload.length) {
+                int read = in.read(payload, offset, payload.length - offset);
+                if (read == -1) {
+                    throw new IOException("conexao encerrada no meio de um frame");
+                }
+                offset += read;
+            }
+            if (masked) {
+                for (int i = 0; i < payload.length; i++) {
+                    payload[i] = (byte) (payload[i] ^ mask[i % 4]);
+                }
+            }
+
+            if (fin && assembled == null) {
+                return new String(payload, StandardCharsets.UTF_8);
+            }
+
+            if (assembled == null) {
+                assembled = new ByteArrayOutputStream();
+            }
+            assembled.write(payload);
+            if (assembled.size() > 16 * 1024 * 1024) {
+                throw new IOException("mensagem agregada excede o limite de 16MB");
+            }
+
+            if (fin) {
+                return assembled.toString(StandardCharsets.UTF_8.name());
+            }
+        }
+    }
+
+    private static void skipFrame(InputStream in) throws IOException {
         int secondByte = readStrict(in);
         boolean masked = (secondByte & 0x80) != 0;
         long length = secondByte & 0x7F;
-
         if (length == 126) {
-            length = (readStrict(in) << 8) | readStrict(in);
+            length = ((readStrict(in) & 0xFF) << 8) | (readStrict(in) & 0xFF);
         } else if (length == 127) {
             length = 0;
             for (int i = 0; i < 8; i++) {
-                length = (length << 8) | readStrict(in);
+                length = (length << 8) | (readStrict(in) & 0xFFL);
             }
         }
-
-        byte[] mask = new byte[4];
         if (masked) {
             for (int i = 0; i < 4; i++) {
-                mask[i] = (byte) readStrict(in);
+                readStrict(in);
             }
         }
-
-        byte[] payload = new byte[(int) length];
-        int offset = 0;
-        while (offset < payload.length) {
-            int read = in.read(payload, offset, payload.length - offset);
-            if (read == -1) {
-                throw new IOException("conexao encerrada no meio de um frame");
-            }
-            offset += read;
+        for (long i = 0; i < length; i++) {
+            readStrict(in);
         }
-        if (masked) {
-            for (int i = 0; i < payload.length; i++) {
-                payload[i] = (byte) (payload[i] ^ mask[i % 4]);
-            }
-        }
-
-        if (opcode == 0x8) {
-            return null; // frame de close
-        }
-        if (opcode == 0x9 || opcode == 0xA) {
-            return readTextFrame(in); // ping/pong: ignora e le o proximo frame real
-        }
-        if (opcode != 0x1) {
-            throw new IOException("opcode nao suportado: " + opcode);
-        }
-        return new String(payload, StandardCharsets.UTF_8);
     }
 
     private static int readStrict(InputStream in) throws IOException {
