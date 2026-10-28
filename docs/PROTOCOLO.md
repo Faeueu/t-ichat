@@ -50,8 +50,8 @@ Mensagens privadas (`PRIVATE`) e arquivos privados (`PRIVATE_FILE`) continuam in
 | `HISTORY_BEGIN|<sala>` | Sinaliza que o usuário (re)entrou nessa sala. O cliente deve limpar a área de mensagens na tela. |
 | `MSG|<sala>|<remetente>|<papel>|<epochMillis>|<texto>` | Mensagem de chat da sala. Usada tanto para repassar o histórico salvo quanto para mensagens novas — o formato é o mesmo. |
 | `HISTORY_END|<sala>` | Marca o fim do replay do histórico; mensagens que chegarem depois disso são "ao vivo". |
-| `PRIVATE|<remetente>|<papel>|<epochMillis>|<texto>` | Mensagem privada de texto, repassada ao destinatário E ecoada ao remetente (para ele ver a própria mensagem enviada). |
-| `PRIVATE_FILE|<remetente>|<papel>|<epochMillis>|<filename>|<dataUrl>|<texto>` | Arquivo, imagem ou planilha privado, repassado ao destinatário E ecoado ao remetente. |
+| `PRIVATE|<remetente>|<destinatario>|<papel>|<epochMillis>|<texto>` | Mensagem privada de texto, repassada ao destinatário E ecoada ao remetente (para ele ver a própria mensagem enviada). |
+| `PRIVATE_FILE|<remetente>|<destinatario>|<papel>|<epochMillis>|<filename>|<dataUrl>|<texto>` | Arquivo, imagem ou planilha privado, repassado ao destinatário E ecoado ao remetente. |
 
 Observações de design:
 - `epochMillis` é o timestamp (`System.currentTimeMillis()`) gerado no servidor no

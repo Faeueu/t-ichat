@@ -164,7 +164,7 @@ body {
     content: "";
 }
 
-#room-list li {
+#room-list li, #ti-list li, #user-list li {
     display: flex;
     align-items: center;
 }

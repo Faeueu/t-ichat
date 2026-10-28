@@ -9,6 +9,13 @@ let announcementsRoom = null; // canal em que so' a T.I escreve (mensagem ANNOUN
 let currentRoom = null; // sala que esta sendo exibida agora nesta aba
 const pendingByRoom = {}; // sala -> mensagens aguardando resposta da T.I (so' a T.I recebe)
 
+// Historico privado mantido em memoria RAM e persistido no LocalStorage
+const privateHistories = {}; // outroUsuario -> [ { type, from, to, role, timestamp, text, filename, dataUrl, isPrivate: true } ]
+const unreadPrivate = {}; // outroUsuario -> quantidade de mensagens nao lidas
+
+// Visualizacao ativa: { type: 'room', id: 'Geral' } ou { type: 'private', id: 'Carlos' }
+let activeView = { type: 'room', id: null };
+
 // Arquivo temporariamente anexado para envio no chat privado
 let stagedFile = null; // { name, size, type, dataUrl }
 
@@ -110,6 +117,42 @@ function splitParts(text, count) {
     return parts;
 }
 
+// ---------- Persistência Local (Memória RAM + LocalStorage) ----------
+
+function getStorageKey(targetUser) {
+    return 'tichat_priv_' + myUsername + '_' + targetUser;
+}
+
+function loadPrivateHistory(targetUser) {
+    if (privateHistories[targetUser]) {
+        return privateHistories[targetUser];
+    }
+    try {
+        const stored = localStorage.getItem(getStorageKey(targetUser));
+        if (stored) {
+            privateHistories[targetUser] = JSON.parse(stored);
+            return privateHistories[targetUser];
+        }
+    } catch (e) {
+        console.warn('Erro ao carregar do LocalStorage:', e);
+    }
+    privateHistories[targetUser] = [];
+    return privateHistories[targetUser];
+}
+
+function savePrivateHistory(targetUser) {
+    const list = privateHistories[targetUser] || [];
+    try {
+        localStorage.setItem(getStorageKey(targetUser), JSON.stringify(list));
+    } catch (e) {
+        // Se a quota do LocalStorage estourar por causa de imagens grandes,
+        // mantemos o histórico preservado na memória RAM durante toda a sessão.
+        console.warn('Quota do LocalStorage excedida. Historico mantido na sessao:', e);
+    }
+}
+
+// ---------- Roteamento de Mensagens do Servidor ----------
+
 function handleServerMessage(raw) {
     if (raw.startsWith('WELCOME|')) {
         [myUsername, myRole] = splitParts(raw.substring('WELCOME|'.length), 2);
@@ -173,33 +216,86 @@ function handleServerMessage(raw) {
 
     if (raw.startsWith('HISTORY_BEGIN|')) {
         currentRoom = raw.substring('HISTORY_BEGIN|'.length);
-        roomTitleEl.textContent = '# ' + currentRoom;
-        messageLogEl.innerHTML = ''; // limpa a tela para mostrar o historico da sala
-        renderRoomList();
-        updateComposer();
+        // Atualiza a tela da sala apenas se o usuario estiver atualmente vendo a sala (nao em privado)
+        if (activeView.type === 'room') {
+            roomTitleEl.textContent = '# ' + currentRoom;
+            messageLogEl.innerHTML = '';
+            renderRoomList();
+            updateComposer();
+        }
         return;
     }
 
     if (raw.startsWith('HISTORY_END|')) {
-        scrollToBottom();
+        if (activeView.type === 'room') {
+            scrollToBottom();
+        }
         return;
     }
 
     if (raw.startsWith('MSG|')) {
         const [room, from, role, timestamp, text] = splitParts(raw.substring('MSG|'.length), 5);
-        addChatMessage(from, role, Number(timestamp), text, false);
+        if (activeView.type === 'room' && room === currentRoom) {
+            addChatMessage(from, role, Number(timestamp), text, false);
+        }
         return;
     }
 
     if (raw.startsWith('PRIVATE|')) {
-        const [from, role, timestamp, text] = splitParts(raw.substring('PRIVATE|'.length), 4);
-        addChatMessage(from, role, Number(timestamp), text, true);
+        // PRIVATE|<from>|<to>|<role>|<timestamp>|<text>
+        const [from, to, role, timestamp, text] = splitParts(raw.substring('PRIVATE|'.length), 5);
+        const otherUser = (from === myUsername) ? to : from;
+
+        const item = {
+            type: 'text',
+            from,
+            to,
+            role,
+            timestamp: Number(timestamp),
+            text,
+            isPrivate: true,
+        };
+        const history = loadPrivateHistory(otherUser);
+        history.push(item);
+        savePrivateHistory(otherUser);
+
+        if (activeView.type === 'private' && privateTarget === otherUser) {
+            addChatMessage(from, role, Number(timestamp), text, true);
+        } else {
+            unreadPrivate[otherUser] = (unreadPrivate[otherUser] || 0) + 1;
+            renderUserList(onlineUsers);
+            addSystemMessage('📩 Nova mensagem privada de ' + from + '. Clique no nome dele(a) na barra lateral para ver.');
+        }
         return;
     }
 
     if (raw.startsWith('PRIVATE_FILE|')) {
-        const [from, role, timestamp, filename, dataUrl, text] = splitParts(raw.substring('PRIVATE_FILE|'.length), 6);
-        addChatFile(from, role, Number(timestamp), filename, dataUrl, text, true);
+        // PRIVATE_FILE|<from>|<to>|<role>|<timestamp>|<filename>|<dataUrl>|<text>
+        const [from, to, role, timestamp, filename, dataUrl, text] = splitParts(raw.substring('PRIVATE_FILE|'.length), 7);
+        const otherUser = (from === myUsername) ? to : from;
+
+        const item = {
+            type: 'file',
+            from,
+            to,
+            role,
+            timestamp: Number(timestamp),
+            filename,
+            dataUrl,
+            text,
+            isPrivate: true,
+        };
+        const history = loadPrivateHistory(otherUser);
+        history.push(item);
+        savePrivateHistory(otherUser);
+
+        if (activeView.type === 'private' && privateTarget === otherUser) {
+            addChatFile(from, role, Number(timestamp), filename, dataUrl, text, true);
+        } else {
+            unreadPrivate[otherUser] = (unreadPrivate[otherUser] || 0) + 1;
+            renderUserList(onlineUsers);
+            addSystemMessage('📎 Novo anexo recebido de ' + from + ' (' + filename + '). Clique no nome dele(a) para abrir a conversa.');
+        }
         return;
     }
 }
@@ -208,6 +304,8 @@ function showChatScreen() {
     loginScreen.classList.add('hidden');
     chatScreen.classList.remove('hidden');
 }
+
+// ---------- Navegação entre Salas (Canais) e Conversas Privadas ----------
 
 function renderRoomList() {
     roomListEl.innerHTML = '';
@@ -222,15 +320,22 @@ function renderRoomList() {
             notif.title = pending + ' mensagem(ns) aguardando resposta da T.I';
             li.appendChild(notif);
         }
-        if (room === currentRoom) li.classList.add('active');
-        li.addEventListener('click', () => switchRoom(room));
+        if (activeView.type === 'room' && room === currentRoom) {
+            li.classList.add('active');
+        }
+        li.addEventListener('click', () => switchToRoom(room));
         roomListEl.appendChild(li);
     });
 }
 
-function switchRoom(room) {
-    if (room === currentRoom || !socket) return;
+function switchToRoom(room) {
+    if (!socket) return;
+    privateTarget = null;
+    activeView = { type: 'room', id: room };
     clearStagedFile();
+    updatePrivateIndicator();
+    renderUserList(onlineUsers);
+    renderRoomList();
     socket.send('JOIN_ROOM|' + room);
 }
 
@@ -244,7 +349,17 @@ function renderUserList(users) {
         .forEach((user) => {
             const li = document.createElement('li');
             li.textContent = user.name;
-            if (user.name === privateTarget) li.classList.add('selected');
+            if (activeView.type === 'private' && user.name === privateTarget) {
+                li.classList.add('selected');
+            }
+            const unread = unreadPrivate[user.name] || 0;
+            if (unread > 0) {
+                const notif = document.createElement('span');
+                notif.className = 'notif';
+                notif.textContent = unread > 99 ? '99+' : unread;
+                notif.title = unread + ' mensagem(ns) privada(s) nao lida(s)';
+                li.appendChild(notif);
+            }
             li.addEventListener('click', () => togglePrivateTarget(user.name));
             (user.role === 'TI' ? tiListEl : userListEl).appendChild(li);
         });
@@ -262,19 +377,51 @@ function addEmptyNotice(listEl, text) {
 }
 
 function togglePrivateTarget(name) {
-    privateTarget = privateTarget === name ? null : name;
+    if (activeView.type === 'private' && privateTarget === name) {
+        // Se já está na conversa com o usuário, voltar para a sala atual
+        switchToRoom(currentRoom || rooms[0] || 'Avisos da T.I');
+    } else {
+        switchToPrivate(name);
+    }
+}
+
+function switchToPrivate(targetUser) {
+    privateTarget = targetUser;
+    activeView = { type: 'private', id: targetUser };
+    unreadPrivate[targetUser] = 0; // Marca como lidas
+    clearStagedFile();
+
+    renderRoomList(); // Desmarca sala ativa
+    renderUserList(onlineUsers); // Marca usuario selecionado
     updatePrivateIndicator();
-    renderUserList(onlineUsers);
+    renderPrivateChat(targetUser);
 }
 
 cancelPrivateButton.addEventListener('click', () => {
-    privateTarget = null;
-    updatePrivateIndicator();
-    renderUserList(onlineUsers);
+    switchToRoom(currentRoom || rooms[0] || 'Avisos da T.I');
 });
 
+function renderPrivateChat(targetUser) {
+    roomTitleEl.textContent = '🔒 Conversa privada com ' + targetUser;
+    messageLogEl.innerHTML = '';
+
+    const history = loadPrivateHistory(targetUser);
+    if (history.length === 0) {
+        addSystemMessage('Início do histórico com ' + targetUser + '. Mensagens e arquivos enviados aqui são privados entre vocês dois.');
+    } else {
+        history.forEach((item) => {
+            if (item.type === 'file') {
+                addChatFile(item.from, item.role, item.timestamp, item.filename, item.dataUrl, item.text, true);
+            } else {
+                addChatMessage(item.from, item.role, item.timestamp, item.text, true);
+            }
+        });
+    }
+    scrollToBottom();
+}
+
 function updatePrivateIndicator() {
-    if (privateTarget) {
+    if (activeView.type === 'private' && privateTarget) {
         privateTargetName.textContent = privateTarget;
         privateIndicator.classList.remove('hidden');
         attachButton.classList.remove('hidden'); // Exibe anexo apenas no privado
@@ -288,13 +435,17 @@ function updatePrivateIndicator() {
 
 // Colaboradores so' leem o canal de avisos; mensagem privada continua liberada em qualquer canal.
 function updateComposer() {
-    const readOnly = currentRoom === announcementsRoom && myRole !== 'TI' && !privateTarget;
+    const isAnnouncements = currentRoom === announcementsRoom;
+    const isPrivate = activeView.type === 'private';
+    const readOnly = isAnnouncements && myRole !== 'TI' && !isPrivate;
+
     messageInput.disabled = readOnly;
     messageForm.querySelector('button[type="submit"]').disabled = readOnly;
-    if (readOnly) {
+
+    if (isPrivate) {
+        messageInput.placeholder = 'Mensagem privada para ' + privateTarget + ' (imagens, planilhas e arquivos permitidos)...';
+    } else if (readOnly) {
         messageInput.placeholder = 'Somente a equipe de T.I publica neste canal.';
-    } else if (privateTarget) {
-        messageInput.placeholder = 'Mensagem privada para ' + privateTarget + ' (anexos permitidos)...';
     } else if (myRole === 'TI') {
         messageInput.placeholder = 'Responda ou publique um aviso...';
     } else {
@@ -305,7 +456,7 @@ function updateComposer() {
 // ---------- Gestão de Anexos (Arquivos, Imagens e Planilhas no Privado) ----------
 
 attachButton.addEventListener('click', () => {
-    if (!privateTarget) {
+    if (activeView.type !== 'private' || !privateTarget) {
         alert('O envio de arquivos é permitido exclusivamente em conversas privadas.');
         return;
     }
@@ -327,8 +478,8 @@ chatMainEl.addEventListener('dragover', (e) => {
 
 chatMainEl.addEventListener('drop', (e) => {
     e.preventDefault();
-    if (!privateTarget) {
-        alert('O envio de arquivos, imagens e planilhas é permitido apenas em conversas privadas.\nSelecione um usuário na lista lateral primeiro.');
+    if (activeView.type !== 'private' || !privateTarget) {
+        alert('O envio de arquivos, imagens e planilhas é permitido apenas em conversas privadas.\nClique em um contato na barra lateral primeiro.');
         return;
     }
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
@@ -432,7 +583,7 @@ messageForm.addEventListener('submit', (e) => {
     if (!text && !stagedFile) return;
     if (!socket) return;
 
-    if (privateTarget) {
+    if (activeView.type === 'private' && privateTarget) {
         if (stagedFile) {
             const safeName = stagedFile.name.replace(/\|/g, '_');
             socket.send('PRIVATE_FILE|' + privateTarget + '|' + safeName + '|' + stagedFile.dataUrl + '|' + text);
@@ -503,7 +654,7 @@ function addChatFile(from, role, timestampMs, filename, dataUrl, text, isPrivate
         (isOwn ? 'Voce' : from) + (isPrivate ? ' (privado)' : '') + ' - ' + hh + ':' + mm));
     div.appendChild(meta);
 
-    // Texto opcional que acompanha o arquivo
+    // Texto opcional que acompanha o anexo
     if (text && text.trim()) {
         const body = document.createElement('div');
         body.className = 'message-text';

@@ -167,7 +167,7 @@ public class ClientHandler implements Runnable {
             String to = parts[1];
             String text = parts[2];
             ClientHandler target = clients.get(to);
-            String payload = "PRIVATE|" + username + "|" + role + "|" + System.currentTimeMillis() + "|" + text;
+            String payload = "PRIVATE|" + username + "|" + to + "|" + role + "|" + System.currentTimeMillis() + "|" + text;
             if (target != null) {
                 target.send(payload);
                 this.send(payload); // ecoa para o proprio remetente ver a mensagem enviada
@@ -187,7 +187,7 @@ public class ClientHandler implements Runnable {
             String text = parts.length > 4 ? parts[4] : "";
 
             ClientHandler target = clients.get(to);
-            String payload = "PRIVATE_FILE|" + username + "|" + role + "|" + System.currentTimeMillis() + "|" + filename + "|" + dataUrl + "|" + text;
+            String payload = "PRIVATE_FILE|" + username + "|" + to + "|" + role + "|" + System.currentTimeMillis() + "|" + filename + "|" + dataUrl + "|" + text;
             if (target != null) {
                 target.send(payload);
                 this.send(payload); // ecoa para o proprio remetente
